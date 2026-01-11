@@ -10,6 +10,7 @@ import { FileNamingStrategy } from "./FileNamingStrategy";
 export class StorageManager {
   private dataDir: string;
   private currentBaseUrl?: string; // 当前工作的基础 URL
+  private currentTaskName?: string; // 当前任务名
 
   constructor(dataDir: string = "./data") {
     this.dataDir = dataDir;
@@ -19,8 +20,14 @@ export class StorageManager {
    * 设置当前工作的基础 URL
    * 这将决定数据保存的位置
    */
-  setBaseUrl(url: string): void {
+  setBaseUrl(url: string, taskName?: string): void {
     this.currentBaseUrl = url;
+    // 如果没有指定任务名，使用 URL 的 path 作为任务名
+    if (taskName) {
+      this.currentTaskName = taskName;
+    } else {
+      this.currentTaskName = this.extractTaskNameFromUrl(url);
+    }
   }
 
   /**
@@ -45,15 +52,42 @@ export class StorageManager {
   }
 
   /**
+   * 从 URL 提取路径作为任务名
+   * 例如: https://example.com/login -> login
+   *      https://example.com/user/profile -> user_profile
+   *      https://example.com/ -> task1 (默认)
+   */
+  private extractTaskNameFromUrl(url: string): string {
+    try {
+      const urlObj = new URL(url);
+      let pathname = urlObj.pathname;
+
+      // 移除开头和结尾的斜杠
+      pathname = pathname.replace(/^\/+|\/+$/g, "");
+
+      // 如果路径为空，返回默认任务名
+      if (!pathname) {
+        return "task1";
+      }
+
+      // 将斜杠替换为下划线，使其成为有效的目录名
+      return pathname.replace(/\//g, "_");
+    } catch (error) {
+      return "task1";
+    }
+  }
+
+  /**
    * 获取基于 URL 的根目录
+   * 结构: data/{domain_port}/{taskName}/
    */
   private getUrlBasedDir(): string {
-    if (!this.currentBaseUrl) {
+    if (!this.currentBaseUrl || !this.currentTaskName) {
       return this.dataDir;
     }
 
     const hostDir = this.extractHostFromUrl(this.currentBaseUrl);
-    return path.join(this.dataDir, hostDir);
+    return path.join(this.dataDir, hostDir, this.currentTaskName);
   }
 
   /**

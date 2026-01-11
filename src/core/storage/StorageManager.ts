@@ -1,7 +1,7 @@
-import * as fs from 'fs/promises';
-import * as path from 'path';
-import { PhaseId } from '../../types/config';
-import { FileNamingStrategy } from './FileNamingStrategy';
+import * as fs from "fs/promises";
+import * as path from "path";
+import { PhaseId } from "../../types/config";
+import { FileNamingStrategy } from "./FileNamingStrategy";
 
 /**
  * 存储管理器
@@ -9,29 +9,72 @@ import { FileNamingStrategy } from './FileNamingStrategy';
  */
 export class StorageManager {
   private dataDir: string;
+  private currentBaseUrl?: string; // 当前工作的基础 URL
 
-  constructor(dataDir: string = './data') {
+  constructor(dataDir: string = "./data") {
     this.dataDir = dataDir;
+  }
+
+  /**
+   * 设置当前工作的基础 URL
+   * 这将决定数据保存的位置
+   */
+  setBaseUrl(url: string): void {
+    this.currentBaseUrl = url;
+  }
+
+  /**
+   * 从 URL 提取域名和端口作为目录名
+   * 例如: https://example.com:8080/path -> example.com_8080
+   *      https://example.com/path -> example.com
+   */
+  private extractHostFromUrl(url: string): string {
+    try {
+      const urlObj = new URL(url);
+      const host = urlObj.hostname;
+      const port = urlObj.port;
+
+      if (port) {
+        return `${host}_${port}`;
+      }
+      return host;
+    } catch (error) {
+      // 如果不是有效的 URL，返回一个安全的默认值
+      return "default";
+    }
+  }
+
+  /**
+   * 获取基于 URL 的根目录
+   */
+  private getUrlBasedDir(): string {
+    if (!this.currentBaseUrl) {
+      return this.dataDir;
+    }
+
+    const hostDir = this.extractHostFromUrl(this.currentBaseUrl);
+    return path.join(this.dataDir, hostDir);
   }
 
   /**
    * 初始化存储目录结构
    */
   async initialize(): Promise<void> {
+    const baseDir = this.getUrlBasedDir();
     const dirs = [
-      'scans',
-      'metadata',
-      'sops',
-      'executions',
-      'derived',
-      'diffs',
-      'reviews/pending',
-      'reviews/completed',
-      'state',
+      "scans",
+      "metadata",
+      "sops",
+      "executions",
+      "derived",
+      "diffs",
+      "reviews/pending",
+      "reviews/completed",
+      "state",
     ];
 
     for (const dir of dirs) {
-      const fullPath = path.join(this.dataDir, dir);
+      const fullPath = path.join(baseDir, dir);
       await fs.mkdir(fullPath, { recursive: true });
     }
   }
@@ -45,11 +88,12 @@ export class StorageManager {
   async savePhaseData<T>(
     phaseId: PhaseId,
     data: T,
-    additionalFiles?: Map<string, Buffer>
+    additionalFiles?: Map<string, Buffer>,
   ): Promise<string> {
+    const baseDir = this.getUrlBasedDir();
     const phaseDir = this.getPhaseDirectory(phaseId);
     const timestampDir = FileNamingStrategy.generateTimestampDir();
-    const targetDir = path.join(this.dataDir, phaseDir, timestampDir);
+    const targetDir = path.join(baseDir, phaseDir, timestampDir);
 
     // 创建时间戳目录
     await fs.mkdir(targetDir, { recursive: true });
@@ -63,12 +107,12 @@ export class StorageManager {
     const jsonFileName = FileNamingStrategy.generateIndexedFileName(
       prefix,
       index,
-      'json'
+      "json",
     );
     const jsonFilePath = path.join(targetDir, jsonFileName);
 
     // 保存 JSON 数据
-    await fs.writeFile(jsonFilePath, JSON.stringify(data, null, 2), 'utf-8');
+    await fs.writeFile(jsonFilePath, JSON.stringify(data, null, 2), "utf-8");
 
     // 保存附加文件
     if (additionalFiles) {
@@ -84,7 +128,7 @@ export class StorageManager {
     await this.saveManifest(targetDir, manifest);
 
     // 更新 latest 符号链接
-    await this.updateLatestSymlink(phaseDir, timestampDir);
+    await this.updateLatestSymlink(path.join(baseDir, phaseDir), timestampDir);
 
     return jsonFilePath;
   }
@@ -93,8 +137,11 @@ export class StorageManager {
    * 加载最新的阶段数据
    */
   async loadLatestPhaseData<T>(phaseId: PhaseId): Promise<T[]> {
+    const baseDir = this.getUrlBasedDir();
     const phaseDir = this.getPhaseDirectory(phaseId);
-    const latestDir = await this.resolveLatestSymlink(phaseDir);
+    const latestDir = await this.resolveLatestSymlink(
+      path.join(baseDir, phaseDir),
+    );
 
     if (!latestDir) {
       return [];
@@ -105,7 +152,7 @@ export class StorageManager {
 
     for (const file of manifest.files) {
       const filePath = path.join(latestDir, file);
-      const content = await fs.readFile(filePath, 'utf-8');
+      const content = await fs.readFile(filePath, "utf-8");
       results.push(JSON.parse(content));
     }
 
@@ -117,17 +164,18 @@ export class StorageManager {
    */
   async loadPhaseDataByTimestamp<T>(
     phaseId: PhaseId,
-    timestamp: string
+    timestamp: string,
   ): Promise<T[]> {
+    const baseDir = this.getUrlBasedDir();
     const phaseDir = this.getPhaseDirectory(phaseId);
-    const targetDir = path.join(this.dataDir, phaseDir, timestamp);
+    const targetDir = path.join(baseDir, phaseDir, timestamp);
 
     const manifest = await this.loadOrCreateManifest(targetDir);
     const results: T[] = [];
 
     for (const file of manifest.files) {
       const filePath = path.join(targetDir, file);
-      const content = await fs.readFile(filePath, 'utf-8');
+      const content = await fs.readFile(filePath, "utf-8");
       results.push(JSON.parse(content));
     }
 
@@ -138,13 +186,14 @@ export class StorageManager {
    * 列出所有时间戳目录
    */
   async listTimestamps(phaseId: PhaseId): Promise<string[]> {
+    const baseDir = this.getUrlBasedDir();
     const phaseDir = this.getPhaseDirectory(phaseId);
-    const fullPath = path.join(this.dataDir, phaseDir);
+    const fullPath = path.join(baseDir, phaseDir);
 
     try {
       const entries = await fs.readdir(fullPath, { withFileTypes: true });
       return entries
-        .filter((entry) => entry.isDirectory() && entry.name !== 'latest')
+        .filter((entry) => entry.isDirectory() && entry.name !== "latest")
         .map((entry) => entry.name)
         .sort()
         .reverse(); // 最新的在前
@@ -160,10 +209,11 @@ export class StorageManager {
     phaseId: PhaseId,
     timestamp: string,
     filename: string,
-    data: Buffer
+    data: Buffer,
   ): Promise<string> {
+    const baseDir = this.getUrlBasedDir();
     const phaseDir = this.getPhaseDirectory(phaseId);
-    const targetDir = path.join(this.dataDir, phaseDir, timestamp);
+    const targetDir = path.join(baseDir, phaseDir, timestamp);
     const filePath = path.join(targetDir, filename);
 
     await fs.mkdir(targetDir, { recursive: true });
@@ -186,14 +236,15 @@ export class StorageManager {
     phaseId: PhaseId,
     timestamp: string,
     filename: string,
-    content: string
+    content: string,
   ): Promise<string> {
+    const baseDir = this.getUrlBasedDir();
     const phaseDir = this.getPhaseDirectory(phaseId);
-    const targetDir = path.join(this.dataDir, phaseDir, timestamp);
+    const targetDir = path.join(baseDir, phaseDir, timestamp);
     const filePath = path.join(targetDir, filename);
 
     await fs.mkdir(targetDir, { recursive: true });
-    await fs.writeFile(filePath, content, 'utf-8');
+    await fs.writeFile(filePath, content, "utf-8");
 
     return filePath;
   }
@@ -202,7 +253,7 @@ export class StorageManager {
    * 读取文本文件
    */
   async readTextFile(filePath: string): Promise<string> {
-    return await fs.readFile(filePath, 'utf-8');
+    return await fs.readFile(filePath, "utf-8");
   }
 
   /**
@@ -210,11 +261,11 @@ export class StorageManager {
    */
   private getPhaseDirectory(phaseId: PhaseId): string {
     const dirMap: Record<PhaseId, string> = {
-      scan: 'scans',
-      interpret: 'metadata',
-      orchestrate: 'sops',
-      execute: 'executions',
-      derive: 'derived',
+      scan: "scans",
+      interpret: "metadata",
+      orchestrate: "sops",
+      execute: "executions",
+      derive: "derived",
     };
     return dirMap[phaseId];
   }
@@ -224,11 +275,11 @@ export class StorageManager {
    */
   private getFilePrefix(phaseId: PhaseId): string {
     const prefixMap: Record<PhaseId, string> = {
-      scan: 'scan',
-      interpret: 'metadata',
-      orchestrate: 'workflow',
-      execute: 'exec',
-      derive: 'derived',
+      scan: "scan",
+      interpret: "metadata",
+      orchestrate: "workflow",
+      execute: "exec",
+      derive: "derived",
     };
     return prefixMap[phaseId];
   }
@@ -237,10 +288,10 @@ export class StorageManager {
    * 加载或创建清单文件
    */
   private async loadOrCreateManifest(dir: string): Promise<Manifest> {
-    const manifestPath = path.join(dir, 'manifest.json');
+    const manifestPath = path.join(dir, "manifest.json");
 
     try {
-      const content = await fs.readFile(manifestPath, 'utf-8');
+      const content = await fs.readFile(manifestPath, "utf-8");
       return JSON.parse(content);
     } catch {
       return {
@@ -255,8 +306,12 @@ export class StorageManager {
    * 保存清单文件
    */
   private async saveManifest(dir: string, manifest: Manifest): Promise<void> {
-    const manifestPath = path.join(dir, 'manifest.json');
-    await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+    const manifestPath = path.join(dir, "manifest.json");
+    await fs.writeFile(
+      manifestPath,
+      JSON.stringify(manifest, null, 2),
+      "utf-8",
+    );
   }
 
   /**
@@ -264,9 +319,9 @@ export class StorageManager {
    */
   private async updateLatestSymlink(
     phaseDir: string,
-    targetDir: string
+    targetDir: string,
   ): Promise<void> {
-    const symlinkPath = path.join(this.dataDir, phaseDir, 'latest');
+    const symlinkPath = path.join(phaseDir, "latest");
 
     try {
       // 删除现有符号链接
@@ -276,18 +331,18 @@ export class StorageManager {
     }
 
     // 创建新的符号链接
-    await fs.symlink(targetDir, symlinkPath, 'dir');
+    await fs.symlink(targetDir, symlinkPath, "dir");
   }
 
   /**
    * 解析 latest 符号链接
    */
   private async resolveLatestSymlink(phaseDir: string): Promise<string | null> {
-    const symlinkPath = path.join(this.dataDir, phaseDir, 'latest');
+    const symlinkPath = path.join(phaseDir, "latest");
 
     try {
       const realPath = await fs.readlink(symlinkPath);
-      return path.join(this.dataDir, phaseDir, realPath);
+      return path.join(phaseDir, realPath);
     } catch {
       // 符号链接不存在，返回 null
       return null;
@@ -298,18 +353,21 @@ export class StorageManager {
    * 保存全局状态
    */
   async saveGlobalState(key: string, value: any): Promise<void> {
-    const statePath = path.join(this.dataDir, 'state', `${key}.json`);
-    await fs.writeFile(statePath, JSON.stringify(value, null, 2), 'utf-8');
+    const baseDir = this.getUrlBasedDir();
+    const statePath = path.join(baseDir, "state", `${key}.json`);
+    await fs.mkdir(path.dirname(statePath), { recursive: true });
+    await fs.writeFile(statePath, JSON.stringify(value, null, 2), "utf-8");
   }
 
   /**
    * 加载全局状态
    */
   async loadGlobalState<T>(key: string): Promise<T | null> {
-    const statePath = path.join(this.dataDir, 'state', `${key}.json`);
+    const baseDir = this.getUrlBasedDir();
+    const statePath = path.join(baseDir, "state", `${key}.json`);
 
     try {
-      const content = await fs.readFile(statePath, 'utf-8');
+      const content = await fs.readFile(statePath, "utf-8");
       return JSON.parse(content);
     } catch {
       return null;

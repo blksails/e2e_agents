@@ -98,6 +98,12 @@ export class AgentOrchestrator {
    * 运行完整的 5 阶段工作流
    */
   async run(config: OrchestratorConfig): Promise<OrchestrationSession> {
+    // 设置 Storage 的基础 URL，使数据按域名分目录保存
+    this.storage.setBaseUrl(config.startUrl);
+
+    // 初始化存储目录
+    await this.storage.initialize();
+
     // 创建新会话
     this.session = {
       id: crypto.randomUUID(),
